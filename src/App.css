@@ -370,7 +370,28 @@
 
 @media (max-width: 550px) {
   .profile-info {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .profile-info strong {
     display: none;
+  }
+
+  .semester-select {
+    display: block;
+    width: 115px;
+    min-height: 38px;
+    padding: 7px 8px;
+
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+
+    background: #ffffff;
+    color: #334155;
+
+    font-size: 11px;
+    cursor: pointer;
   }
 
   .welcome-card {
