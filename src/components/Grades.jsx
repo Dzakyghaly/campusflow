@@ -1,80 +1,14 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Grades({ activeSemester }) {
   // =========================
-  // AMBIL DATA NILAI
-  // BERDASARKAN SEMESTER
+  // DATA
   // =========================
 
-  const getStorageKey = (semester) => {
-    return `campusflow-grades-semester-${semester}`;
-  };
-
-  const getGradesBySemester = (semester) => {
-    const semesterKey = getStorageKey(semester);
-    const savedSemesterGrades = localStorage.getItem(semesterKey);
-
-    // Kalau semester tersebut sudah punya data,
-    // gunakan data semester itu.
-    if (savedSemesterGrades !== null) {
-      return JSON.parse(savedSemesterGrades);
-    }
-
-    // Migrasi data lama ke Semester 1.
-    // Ini hanya dilakukan jika Semester 1
-    // belum mempunyai penyimpanan sendiri.
-    if (semester === "1") {
-      const oldGrades = localStorage.getItem("campusflow-grades");
-
-      if (oldGrades !== null) {
-        const parsedOldGrades = JSON.parse(oldGrades);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldGrades));
-
-        return parsedOldGrades;
-      }
-    }
-
-    // Semester baru dimulai kosong.
-    return [];
-  };
-
-  // =========================
-  // DATA NILAI
-  // =========================
-
-  const [grades, setGrades] = useState(() => {
-    return getGradesBySemester(activeSemester);
-  });
-
-  const [courses, setCourses] = useState(() => {
-    const savedCourses = localStorage.getItem(
-      `campusflow-courses-semester-${activeSemester}`,
-    );
-
-    return savedCourses ? JSON.parse(savedCourses) : [];
-  });
-
-  // =========================
-  // GANTI DATA SAAT
-  // SEMESTER BERUBAH
-  // =========================
-
-  useEffect(() => {
-    const semesterGrades = getGradesBySemester(activeSemester);
-
-    setGrades(semesterGrades);
-  }, [activeSemester]);
-
-  // =========================
-  // SIMPAN DATA NILAI
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(grades));
-  }, [grades, activeSemester]);
+  const [grades, setGrades] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // MODAL
@@ -94,17 +28,138 @@ function Grades({ activeSemester }) {
   });
 
   // =========================
+  // AMBIL USER
+  // =========================
+
+  async function getCurrentUser() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error("Gagal mengambil session:", error);
+      return null;
+    }
+
+    return session?.user || null;
+  }
+
+  // =========================
+  // AMBIL GRADES
+  // =========================
+
+  async function fetchGrades() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setGrades([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("grades")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil grades:", error);
+        setGrades([]);
+        return;
+      }
+
+      const formattedGrades = (data || []).map((item) => ({
+        id: item.id,
+        course: item.course || "",
+        credits: Number(item.credits || 0),
+        grade: item.grade || "A",
+        gradePoint: Number(item.grade_point || 0),
+      }));
+
+      setGrades(formattedGrades);
+    } catch (error) {
+      console.error("Error fetchGrades:", error);
+      setGrades([]);
+    }
+  }
+
+  // =========================
+  // AMBIL COURSES
+  // =========================
+
+  async function fetchCourses() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setCourses([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil courses:", error);
+        setCourses([]);
+        return;
+      }
+
+      setCourses(data || []);
+    } catch (error) {
+      console.error("Error fetchCourses Grades:", error);
+      setCourses([]);
+    }
+  }
+
+  // =========================
+  // LOAD DATA
+  // =========================
+
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+
+      setShowForm(false);
+      setEditingId(null);
+
+      setForm({
+        course: "",
+        credits: "",
+        grade: "A",
+      });
+
+      await Promise.all([fetchGrades(), fetchCourses()]);
+
+      setLoading(false);
+    }
+
+    loadData();
+  }, [activeSemester]);
+
+  // =========================
   // INPUT FORM
   // =========================
 
   function handleChange(event) {
     const { name, value } = event.target;
 
-    setForm({
-      ...form,
+    setForm((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
   }
+
+  // =========================
+  // PILIH MATA KULIAH
+  // =========================
 
   function handleCourseChange(event) {
     const selectedCourseName = event.target.value;
@@ -114,20 +169,20 @@ function Grades({ activeSemester }) {
     );
 
     if (!selectedCourse) {
-      setForm({
-        ...form,
+      setForm((previous) => ({
+        ...previous,
         course: "",
         credits: "",
-      });
+      }));
 
       return;
     }
 
-    setForm({
-      ...form,
+    setForm((previous) => ({
+      ...previous,
       course: selectedCourse.name,
       credits: selectedCourse.credits || "",
-    });
+    }));
   }
 
   // =========================
@@ -143,7 +198,7 @@ function Grades({ activeSemester }) {
       E: 0,
     };
 
-    return gradePoints[grade];
+    return gradePoints[grade] ?? 0;
   }
 
   // =========================
@@ -181,7 +236,7 @@ function Grades({ activeSemester }) {
   // SIMPAN NILAI
   // =========================
 
-  function saveGrade(event) {
+  async function saveGrade(event) {
     event.preventDefault();
 
     if (!form.course || !form.credits || !form.grade) {
@@ -192,39 +247,70 @@ function Grades({ activeSemester }) {
     const credits = Number(form.credits);
     const gradePoint = getGradePoint(form.grade);
 
-    // EDIT NILAI
-    if (editingId !== null) {
-      const updatedGrades = grades.map((item) => {
-        if (item.id === editingId) {
-          return {
-            ...item,
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
+
+      // =========================
+      // EDIT NILAI
+      // =========================
+
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from("grades")
+          .update({
             course: form.course,
             credits: credits,
             grade: form.grade,
-            gradePoint: gradePoint,
-          };
+            grade_point: gradePoint,
+          })
+          .eq("id", editingId)
+          .eq("user_id", user.id);
+
+        if (error) {
+          console.error("Gagal mengedit nilai:", error);
+
+          alert("Gagal menyimpan perubahan: " + error.message);
+
+          return;
         }
+      }
 
-        return item;
-      });
+      // =========================
+      // TAMBAH NILAI
+      // =========================
+      else {
+        const { error } = await supabase.from("grades").insert([
+          {
+            user_id: user.id,
+            semester: Number(activeSemester),
+            course: form.course,
+            credits: credits,
+            grade: form.grade,
+            grade_point: gradePoint,
+          },
+        ]);
 
-      setGrades(updatedGrades);
+        if (error) {
+          console.error("Gagal menambah nilai:", error);
+
+          alert("Gagal menyimpan nilai: " + error.message);
+
+          return;
+        }
+      }
+
+      closeForm();
+      await fetchGrades();
+    } catch (error) {
+      console.error("Error saveGrade:", error);
+
+      alert("Terjadi kesalahan saat menyimpan nilai.");
     }
-
-    // TAMBAH NILAI
-    else {
-      const newGrade = {
-        id: Date.now(),
-        course: form.course,
-        credits: credits,
-        grade: form.grade,
-        gradePoint: gradePoint,
-      };
-
-      setGrades([...grades, newGrade]);
-    }
-
-    closeForm();
   }
 
   // =========================
@@ -247,7 +333,7 @@ function Grades({ activeSemester }) {
   // HAPUS NILAI
   // =========================
 
-  function deleteGrade(id) {
+  async function deleteGrade(id) {
     const confirmDelete = window.confirm(
       "Apakah kamu yakin ingin menghapus data nilai ini?",
     );
@@ -256,9 +342,34 @@ function Grades({ activeSemester }) {
       return;
     }
 
-    const remainingGrades = grades.filter((item) => item.id !== id);
+    try {
+      const user = await getCurrentUser();
 
-    setGrades(remainingGrades);
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("grades")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal menghapus nilai:", error);
+
+        alert("Gagal menghapus nilai: " + error.message);
+
+        return;
+      }
+
+      await fetchGrades();
+    } catch (error) {
+      console.error("Error deleteGrade:", error);
+
+      alert("Terjadi kesalahan saat menghapus nilai.");
+    }
   }
 
   // =========================
@@ -278,6 +389,30 @@ function Grades({ activeSemester }) {
   );
 
   const semesterGPA = totalCredits > 0 ? totalQualityPoints / totalCredits : 0;
+
+  // =========================
+  // LOADING
+  // =========================
+
+  if (loading) {
+    return (
+      <section className="grades-page">
+        <div className="page-header">
+          <div>
+            <span className="section-label">SEMESTER {activeSemester}</span>
+
+            <h2>Grades</h2>
+
+            <p>Memuat data nilai...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // =========================
+  // RETURN
+  // =========================
 
   return (
     <section className="grades-page">
@@ -406,6 +541,8 @@ function Grades({ activeSemester }) {
             </div>
 
             <form onSubmit={saveGrade}>
+              {/* MATA KULIAH */}
+
               <div className="form-group">
                 <label>Mata Kuliah</label>
 
@@ -433,6 +570,8 @@ function Grades({ activeSemester }) {
                 )}
               </div>
 
+              {/* JUMLAH SKS */}
+
               <div className="form-group">
                 <label>Jumlah SKS</label>
 
@@ -447,6 +586,8 @@ function Grades({ activeSemester }) {
                 />
               </div>
 
+              {/* NILAI */}
+
               <div className="form-group">
                 <label>Nilai</label>
 
@@ -458,6 +599,8 @@ function Grades({ activeSemester }) {
                   <option value="E">E</option>
                 </select>
               </div>
+
+              {/* BUTTON */}
 
               <div className="modal-actions">
                 <button

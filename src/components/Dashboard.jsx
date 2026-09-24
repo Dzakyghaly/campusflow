@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Dashboard({ setCurrentPage, activeSemester }) {
   // =========================
@@ -6,9 +7,7 @@ function Dashboard({ setCurrentPage, activeSemester }) {
   // =========================
 
   const [tasks, setTasks] = useState([]);
-
   const [schedules, setSchedules] = useState([]);
-
   const [courses, setCourses] = useState([]);
 
   const [tuition, setTuition] = useState({
@@ -18,45 +17,248 @@ function Dashboard({ setCurrentPage, activeSemester }) {
   });
 
   // =========================
+  // AMBIL COURSES DARI SUPABASE
+  // =========================
+
+  async function fetchCourses() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+        setCourses([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setCourses([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil courses di dashboard:", error);
+
+        setCourses([]);
+        return;
+      }
+
+      setCourses(data || []);
+    } catch (error) {
+      console.error("Error fetchCourses Dashboard:", error);
+
+      setCourses([]);
+    }
+  }
+
+  // =========================
+  // AMBIL TASKS DARI SUPABASE
+  // =========================
+
+  async function fetchTasks() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+        setTasks([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setTasks([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("Gagal mengambil tasks di dashboard:", error);
+
+        setTasks([]);
+        return;
+      }
+
+      const formattedTasks = (data || []).map((task) => ({
+        ...task,
+
+        deadlineTime: task.deadline_time ? task.deadline_time.slice(0, 5) : "",
+      }));
+
+      setTasks(formattedTasks);
+    } catch (error) {
+      console.error("Error fetchTasks Dashboard:", error);
+
+      setTasks([]);
+    }
+  }
+
+  // =========================
+  // AMBIL SCHEDULE DARI SUPABASE
+  // =========================
+
+  async function fetchSchedules() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+        setSchedules([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setSchedules([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("schedules")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("start_time", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil schedules di dashboard:", error);
+
+        setSchedules([]);
+        return;
+      }
+
+      const formattedSchedules = (data || []).map((schedule) => ({
+        ...schedule,
+
+        startTime: schedule.start_time ? schedule.start_time.slice(0, 5) : "",
+
+        endTime: schedule.end_time ? schedule.end_time.slice(0, 5) : "",
+      }));
+
+      setSchedules(formattedSchedules);
+    } catch (error) {
+      console.error("Error fetchSchedules Dashboard:", error);
+
+      setSchedules([]);
+    }
+  }
+
+  // =========================
+  // AMBIL TUITION DARI SUPABASE
+  // =========================
+
+  async function fetchTuition() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+
+        setTuition({
+          semester: Number(activeSemester),
+          totalFee: 0,
+          payments: [],
+        });
+
+        return;
+      }
+
+      if (!session?.user) {
+        setTuition({
+          semester: Number(activeSemester),
+          totalFee: 0,
+          payments: [],
+        });
+
+        return;
+      }
+
+      // =========================
+      // TOTAL TAGIHAN
+      // =========================
+
+      const { data: tuitionData, error: tuitionError } = await supabase
+        .from("tuition")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .maybeSingle();
+
+      if (tuitionError) {
+        console.error("Gagal mengambil tuition di dashboard:", tuitionError);
+      }
+
+      // =========================
+      // RIWAYAT PEMBAYARAN
+      // =========================
+
+      const { data: paymentData, error: paymentError } = await supabase
+        .from("tuition_payments")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("payment_date", { ascending: true });
+
+      if (paymentError) {
+        console.error("Gagal mengambil pembayaran di dashboard:", paymentError);
+      }
+
+      const formattedPayments = (paymentData || []).map((payment) => ({
+        id: payment.id,
+        amount: Number(payment.amount),
+        date: payment.payment_date,
+        note: payment.note || "",
+      }));
+
+      setTuition({
+        semester: Number(activeSemester),
+
+        totalFee: Number(tuitionData?.total_fee || 0),
+
+        payments: formattedPayments,
+      });
+    } catch (error) {
+      console.error("Error fetchTuition Dashboard:", error);
+
+      setTuition({
+        semester: Number(activeSemester),
+        totalFee: 0,
+        payments: [],
+      });
+    }
+  }
+
+  // =========================
   // AMBIL DATA PER SEMESTER
   // =========================
 
   useEffect(() => {
-    const semester = activeSemester;
-
-    const savedTasks =
-      JSON.parse(
-        localStorage.getItem(`campusflow-tasks-semester-${semester}`),
-      ) || [];
-
-    const savedSchedules =
-      JSON.parse(
-        localStorage.getItem(`campusflow-schedules-semester-${semester}`),
-      ) || [];
-
-    const savedCourses =
-      JSON.parse(
-        localStorage.getItem(`campusflow-courses-semester-${semester}`),
-      ) || [];
-
-    const savedTuition = JSON.parse(
-      localStorage.getItem(`campusflow-tuition-semester-${semester}`),
-    ) || {
-      semester: Number(semester),
-      totalFee: 0,
-      payments: [],
-    };
-
-    setTasks(savedTasks);
-
-    setSchedules(savedSchedules);
-
-    setCourses(savedCourses);
-
-    setTuition({
-      ...savedTuition,
-      semester: Number(semester),
-    });
+    fetchCourses();
+    fetchTasks();
+    fetchSchedules();
+    fetchTuition();
   }, [activeSemester]);
 
   // =========================
@@ -80,7 +282,7 @@ function Dashboard({ setCurrentPage, activeSemester }) {
       style: "currency",
       currency: "IDR",
       minimumFractionDigits: 0,
-    }).format(value);
+    }).format(Number(value) || 0);
   }
 
   // =========================
@@ -110,7 +312,13 @@ function Dashboard({ setCurrentPage, activeSemester }) {
 
   const upcomingTasks = activeTasks
     .filter((task) => task.deadline)
-    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
+    .sort((a, b) => {
+      const dateA = new Date(`${a.deadline}T${a.deadlineTime || "23:59"}`);
+
+      const dateB = new Date(`${b.deadline}T${b.deadlineTime || "23:59"}`);
+
+      return dateA - dateB;
+    })
     .slice(0, 3);
 
   // =========================
@@ -146,6 +354,10 @@ function Dashboard({ setCurrentPage, activeSemester }) {
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   const nextClass = todaySchedules.find((schedule) => {
+    if (!schedule.startTime) {
+      return false;
+    }
+
     const [hour, minute] = schedule.startTime.split(":").map(Number);
 
     const scheduleMinutes = hour * 60 + minute;
@@ -183,9 +395,15 @@ function Dashboard({ setCurrentPage, activeSemester }) {
     return `${days} hari`;
   }
 
+  // =========================
+  // RETURN
+  // =========================
+
   return (
     <section className="dashboard">
-      {/* SEMESTER INFO */}
+      {/* =========================
+          SEMESTER INFO
+      ========================= */}
 
       <div
         style={{
@@ -197,7 +415,9 @@ function Dashboard({ setCurrentPage, activeSemester }) {
         </span>
       </div>
 
-      {/* NEXT CLASS */}
+      {/* =========================
+          NEXT CLASS
+      ========================= */}
 
       <div className="next-class-card">
         {nextClass ? (
@@ -238,7 +458,9 @@ function Dashboard({ setCurrentPage, activeSemester }) {
         )}
       </div>
 
-      {/* STATISTICS */}
+      {/* =========================
+          STATISTICS
+      ========================= */}
 
       <div className="stats-grid">
         <div className="stat-card">
@@ -274,7 +496,9 @@ function Dashboard({ setCurrentPage, activeSemester }) {
         </div>
       </div>
 
-      {/* CONTENT */}
+      {/* =========================
+          CONTENT
+      ========================= */}
 
       <div className="dashboard-grid">
         {/* LEFT */}
@@ -384,7 +608,11 @@ function Dashboard({ setCurrentPage, activeSemester }) {
                     >
                       <strong>{getDeadlineText(task.deadline)}</strong>
 
-                      <span>{task.deadline}</span>
+                      <span>
+                        {task.deadline}
+
+                        {task.deadlineTime ? ` • ${task.deadlineTime}` : ""}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -441,7 +669,9 @@ function Dashboard({ setCurrentPage, activeSemester }) {
             </div>
           </div>
 
-          {/* TUITION PREVIEW */}
+          {/* =========================
+              TUITION PREVIEW
+          ========================= */}
 
           <div className="dashboard-card tuition-card">
             <div className="section-header">

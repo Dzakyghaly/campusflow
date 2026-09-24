@@ -1,48 +1,43 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Courses({ activeSemester }) {
-  // =========================
-  // STORAGE PER SEMESTER
-  // =========================
-
-  function getStorageKey(semester) {
-    return `campusflow-courses-semester-${semester}`;
-  }
-
-  function getCoursesBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemesterCourses = localStorage.getItem(semesterKey);
-
-    // Jika semester sudah punya penyimpanan sendiri
-    if (savedSemesterCourses !== null) {
-      return JSON.parse(savedSemesterCourses);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldCourses = localStorage.getItem("campusflow-courses");
-
-      if (oldCourses !== null) {
-        const parsedOldCourses = JSON.parse(oldCourses);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldCourses));
-
-        return parsedOldCourses;
-      }
-    }
-
-    // Semester baru masih kosong
-    return [];
-  }
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // DATA MATA KULIAH
   // =========================
 
-  const [courses, setCourses] = useState(() => {
-    return getCoursesBySemester(activeSemester);
-  });
+  const [courses, setCourses] = useState([]);
+  async function fetchCourses() {
+    setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setCourses([]);
+      setLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("courses")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("semester", Number(activeSemester))
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Gagal mengambil mata kuliah:", error);
+      setCourses([]);
+    } else {
+      setCourses(data || []);
+    }
+
+    setLoading(false);
+  }
 
   // =========================
   // MODAL
@@ -70,9 +65,7 @@ function Courses({ activeSemester }) {
   // =========================
 
   useEffect(() => {
-    const semesterCourses = getCoursesBySemester(activeSemester);
-
-    setCourses(semesterCourses);
+    fetchCourses();
 
     // Tutup form jika semester diganti
     setShowForm(false);
@@ -86,16 +79,6 @@ function Courses({ activeSemester }) {
       room: "",
     });
   }, [activeSemester]);
-
-  // =========================
-  // SIMPAN LOCAL STORAGE
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(courses));
-  }, [courses, activeSemester]);
 
   // =========================
   // INPUT
@@ -149,44 +132,76 @@ function Courses({ activeSemester }) {
   // SIMPAN MATA KULIAH
   // =========================
 
-  function saveCourse(event) {
+  async function saveCourse(event) {
     event.preventDefault();
 
     if (!form.code || !form.name || !form.lecturer || !form.credits) {
       alert("Lengkapi data mata kuliah terlebih dahulu.");
-
       return;
     }
 
-    // EDIT
-    if (editingId !== null) {
-      const updatedCourses = courses.map((course) => {
-        if (course.id === editingId) {
-          return {
-            ...course,
-            ...form,
-            credits: Number(form.credits),
-          };
-        }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-        return course;
+    if (!user) {
+      alert("Sesi login tidak ditemukan. Silakan login kembali.");
+      return;
+    }
+
+    setLoading(true);
+
+    // =========================
+    // EDIT MATA KULIAH
+    // =========================
+
+    if (editingId !== null) {
+      const { error } = await supabase
+        .from("courses")
+        .update({
+          code: form.code,
+          name: form.name,
+          lecturer: form.lecturer,
+          credits: Number(form.credits),
+          room: form.room,
+        })
+        .eq("id", editingId)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal mengedit mata kuliah:", error);
+        alert("Gagal menyimpan perubahan mata kuliah.");
+        setLoading(false);
+        return;
+      }
+    }
+
+    // =========================
+    // TAMBAH MATA KULIAH
+    // =========================
+    else {
+      const { error } = await supabase.from("courses").insert({
+        user_id: user.id,
+        semester: Number(activeSemester),
+        code: form.code,
+        name: form.name,
+        lecturer: form.lecturer,
+        credits: Number(form.credits),
+        room: form.room,
       });
 
-      setCourses(updatedCourses);
+      if (error) {
+        console.error("Gagal menambahkan mata kuliah:", error);
+        alert("Gagal menambahkan mata kuliah.");
+        setLoading(false);
+        return;
+      }
     }
 
-    // TAMBAH BARU
-    else {
-      const newCourse = {
-        id: Date.now(),
-        ...form,
-        credits: Number(form.credits),
-      };
-
-      setCourses([...courses, newCourse]);
-    }
+    await fetchCourses();
 
     closeForm();
+    setLoading(false);
   }
 
   // =========================
@@ -211,16 +226,40 @@ function Courses({ activeSemester }) {
   // HAPUS
   // =========================
 
-  function deleteCourse(id) {
+  async function deleteCourse(id) {
     const confirmDelete = window.confirm("Hapus mata kuliah ini?");
 
     if (!confirmDelete) {
       return;
     }
 
-    const remainingCourses = courses.filter((course) => course.id !== id);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    setCourses(remainingCourses);
+    if (!user) {
+      alert("Sesi login tidak ditemukan. Silakan login kembali.");
+      return;
+    }
+
+    setLoading(true);
+
+    const { error } = await supabase
+      .from("courses")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id);
+
+    if (error) {
+      console.error("Gagal menghapus mata kuliah:", error);
+      alert("Gagal menghapus mata kuliah.");
+      setLoading(false);
+      return;
+    }
+
+    await fetchCourses();
+
+    setLoading(false);
   }
 
   // =========================

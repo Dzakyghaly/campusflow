@@ -1,64 +1,24 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Tuition({ activeSemester }) {
-  // =========================
-  // STORAGE PER SEMESTER
-  // =========================
-
-  function getStorageKey(semester) {
-    return `campusflow-tuition-semester-${semester}`;
-  }
-
-  function getTuitionBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemester = localStorage.getItem(semesterKey);
-
-    // Kalau semester sudah punya data
-    if (savedSemester !== null) {
-      return JSON.parse(savedSemester);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldTuition = localStorage.getItem("campusflow-tuition");
-
-      if (oldTuition !== null) {
-        const parsedOldTuition = JSON.parse(oldTuition);
-
-        const migratedTuition = {
-          ...parsedOldTuition,
-          semester: 1,
-        };
-
-        localStorage.setItem(semesterKey, JSON.stringify(migratedTuition));
-
-        return migratedTuition;
-      }
-    }
-
-    // Semester baru dimulai kosong
-    return {
-      semester: Number(semester),
-      totalFee: 0,
-      payments: [],
-    };
-  }
-
   // =========================
   // DATA PEMBAYARAN
   // =========================
 
-  const [tuition, setTuition] = useState(() =>
-    getTuitionBySemester(activeSemester),
-  );
+  const [tuition, setTuition] = useState({
+    semester: Number(activeSemester),
+    totalFee: 0,
+    payments: [],
+  });
+
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // MODAL
   // =========================
 
   const [showPaymentForm, setShowPaymentForm] = useState(false);
-
   const [showSettingForm, setShowSettingForm] = useState(false);
 
   // =========================
@@ -76,18 +36,110 @@ function Tuition({ activeSemester }) {
   // =========================
 
   const [settingForm, setSettingForm] = useState({
-    totalFee: tuition.totalFee,
+    totalFee: 0,
   });
 
   // =========================
-  // SIMPAN LOCAL STORAGE
+  // AMBIL USER
+  // =========================
+
+  async function getCurrentUser() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error("Gagal mengambil session:", error);
+      return null;
+    }
+
+    return session?.user || null;
+  }
+
+  // =========================
+  // AMBIL DATA TUITION
+  // =========================
+
+  async function fetchTuition() {
+    try {
+      setLoading(true);
+
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setTuition({
+          semester: Number(activeSemester),
+          totalFee: 0,
+          payments: [],
+        });
+
+        return;
+      }
+
+      // =========================
+      // AMBIL TOTAL TAGIHAN
+      // =========================
+
+      const { data: tuitionData, error: tuitionError } = await supabase
+        .from("tuition")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .maybeSingle();
+
+      if (tuitionError) {
+        console.error("Gagal mengambil data tuition:", tuitionError);
+      }
+
+      // =========================
+      // AMBIL RIWAYAT PEMBAYARAN
+      // =========================
+
+      const { data: paymentData, error: paymentError } = await supabase
+        .from("tuition_payments")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("payment_date", { ascending: true });
+
+      if (paymentError) {
+        console.error("Gagal mengambil riwayat pembayaran:", paymentError);
+      }
+
+      const formattedPayments = (paymentData || []).map((payment) => ({
+        id: payment.id,
+        amount: Number(payment.amount),
+        date: payment.payment_date,
+        note: payment.note || "",
+      }));
+
+      setTuition({
+        semester: Number(activeSemester),
+        totalFee: Number(tuitionData?.total_fee || 0),
+        payments: formattedPayments,
+      });
+
+      setSettingForm({
+        totalFee: Number(tuitionData?.total_fee || 0),
+      });
+    } catch (error) {
+      console.error("Error mengambil Tuition:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // =========================
+  // LOAD DATA
   // =========================
 
   useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
+    setShowPaymentForm(false);
+    setShowSettingForm(false);
 
-    localStorage.setItem(semesterKey, JSON.stringify(tuition));
-  }, [tuition, activeSemester]);
+    fetchTuition();
+  }, [activeSemester]);
 
   // =========================
   // PERHITUNGAN
@@ -98,7 +150,7 @@ function Tuition({ activeSemester }) {
     0,
   );
 
-  const remaining = Math.max(tuition.totalFee - totalPaid, 0);
+  const remaining = Math.max(Number(tuition.totalFee) - totalPaid, 0);
 
   const progress =
     tuition.totalFee === 0
@@ -114,7 +166,7 @@ function Tuition({ activeSemester }) {
       style: "currency",
       currency: "IDR",
       minimumFractionDigits: 0,
-    }).format(value);
+    }).format(Number(value) || 0);
   }
 
   // =========================
@@ -126,7 +178,7 @@ function Tuition({ activeSemester }) {
       return "-";
     }
 
-    return new Date(date + "T00:00:00").toLocaleDateString("id-ID", {
+    return new Date(`${date}T00:00:00`).toLocaleDateString("id-ID", {
       day: "numeric",
       month: "long",
       year: "numeric",
@@ -140,10 +192,10 @@ function Tuition({ activeSemester }) {
   function handlePaymentChange(event) {
     const { name, value } = event.target;
 
-    setPaymentForm({
-      ...paymentForm,
+    setPaymentForm((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
   }
 
   // =========================
@@ -153,7 +205,11 @@ function Tuition({ activeSemester }) {
   function openPaymentForm() {
     if (tuition.totalFee <= 0) {
       alert("Atur total biaya semester terlebih dahulu.");
+      return;
+    }
 
+    if (remaining <= 0) {
+      alert("Pembayaran semester ini sudah lunas.");
       return;
     }
 
@@ -170,61 +226,102 @@ function Tuition({ activeSemester }) {
   // TAMBAH PEMBAYARAN
   // =========================
 
-  function addPayment(event) {
+  async function addPayment(event) {
     event.preventDefault();
 
     const amount = Number(paymentForm.amount);
 
     if (!amount || amount <= 0 || !paymentForm.date) {
       alert("Isi nominal dan tanggal pembayaran.");
-
       return;
     }
 
     if (amount > remaining) {
       alert("Nominal pembayaran melebihi sisa tagihan.");
-
       return;
     }
 
-    const newPayment = {
-      id: Date.now(),
-      amount,
-      date: paymentForm.date,
-      note: paymentForm.note || `Pembayaran ${tuition.payments.length + 1}`,
-    };
+    try {
+      const user = await getCurrentUser();
 
-    setTuition({
-      ...tuition,
+      if (!user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
 
-      payments: [...tuition.payments, newPayment],
-    });
+      const defaultNote = `Pembayaran ${tuition.payments.length + 1}`;
 
-    setPaymentForm({
-      amount: "",
-      date: "",
-      note: "",
-    });
+      const { error } = await supabase.from("tuition_payments").insert([
+        {
+          user_id: user.id,
+          semester: Number(activeSemester),
+          payment_date: paymentForm.date,
+          amount,
+          note: paymentForm.note.trim() || defaultNote,
+        },
+      ]);
 
-    setShowPaymentForm(false);
+      if (error) {
+        console.error("Gagal menambah pembayaran:", error);
+
+        alert("Gagal menyimpan pembayaran: " + error.message);
+        return;
+      }
+
+      setPaymentForm({
+        amount: "",
+        date: "",
+        note: "",
+      });
+
+      setShowPaymentForm(false);
+
+      await fetchTuition();
+    } catch (error) {
+      console.error("Error tambah pembayaran:", error);
+
+      alert("Terjadi kesalahan saat menyimpan pembayaran.");
+    }
   }
 
   // =========================
   // HAPUS PEMBAYARAN
   // =========================
 
-  function deletePayment(id) {
+  async function deletePayment(id) {
     const confirmDelete = window.confirm("Hapus catatan pembayaran ini?");
 
     if (!confirmDelete) {
       return;
     }
 
-    setTuition({
-      ...tuition,
+    try {
+      const user = await getCurrentUser();
 
-      payments: tuition.payments.filter((payment) => payment.id !== id),
-    });
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("tuition_payments")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal menghapus pembayaran:", error);
+
+        alert("Gagal menghapus pembayaran: " + error.message);
+        return;
+      }
+
+      await fetchTuition();
+    } catch (error) {
+      console.error("Error hapus pembayaran:", error);
+
+      alert("Terjadi kesalahan saat menghapus pembayaran.");
+    }
   }
 
   // =========================
@@ -243,14 +340,13 @@ function Tuition({ activeSemester }) {
   // SIMPAN PENGATURAN
   // =========================
 
-  function saveSetting(event) {
+  async function saveSetting(event) {
     event.preventDefault();
 
     const newTotalFee = Number(settingForm.totalFee);
 
-    if (newTotalFee <= 0) {
+    if (!newTotalFee || newTotalFee <= 0) {
       alert("Total biaya kuliah harus lebih dari 0.");
-
       return;
     }
 
@@ -262,16 +358,103 @@ function Tuition({ activeSemester }) {
       return;
     }
 
-    setTuition({
-      ...tuition,
+    try {
+      const user = await getCurrentUser();
 
-      semester: Number(activeSemester),
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
 
-      totalFee: newTotalFee,
-    });
+      // Cek apakah semester ini sudah punya data tuition
+      const { data: existingTuition, error: checkError } = await supabase
+        .from("tuition")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .maybeSingle();
 
-    setShowSettingForm(false);
+      if (checkError) {
+        console.error("Gagal mengecek tuition:", checkError);
+
+        alert("Gagal mengecek data biaya kuliah.");
+        return;
+      }
+
+      // =========================
+      // UPDATE
+      // =========================
+
+      if (existingTuition) {
+        const { error } = await supabase
+          .from("tuition")
+          .update({
+            total_fee: newTotalFee,
+          })
+          .eq("id", existingTuition.id)
+          .eq("user_id", user.id);
+
+        if (error) {
+          console.error("Gagal update tuition:", error);
+
+          alert("Gagal menyimpan total biaya: " + error.message);
+          return;
+        }
+      }
+
+      // =========================
+      // INSERT
+      // =========================
+      else {
+        const { error } = await supabase.from("tuition").insert([
+          {
+            user_id: user.id,
+            semester: Number(activeSemester),
+            total_fee: newTotalFee,
+          },
+        ]);
+
+        if (error) {
+          console.error("Gagal membuat tuition:", error);
+
+          alert("Gagal menyimpan total biaya: " + error.message);
+          return;
+        }
+      }
+
+      setShowSettingForm(false);
+
+      await fetchTuition();
+    } catch (error) {
+      console.error("Error simpan tuition:", error);
+
+      alert("Terjadi kesalahan saat menyimpan total biaya.");
+    }
   }
+
+  // =========================
+  // LOADING
+  // =========================
+
+  if (loading) {
+    return (
+      <section className="tuition-page">
+        <div className="page-header">
+          <div>
+            <span className="section-label">SEMESTER {activeSemester}</span>
+
+            <h2>Pembayaran Kuliah</h2>
+
+            <p>Memuat data pembayaran...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // =========================
+  // RETURN
+  // =========================
 
   return (
     <section className="tuition-page">
@@ -572,7 +755,6 @@ function Tuition({ activeSemester }) {
                   onChange={(event) =>
                     setSettingForm({
                       ...settingForm,
-
                       totalFee: event.target.value,
                     })
                   }

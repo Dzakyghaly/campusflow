@@ -1,65 +1,21 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Notes({ activeSemester }) {
   // =========================
-  // STORAGE PER SEMESTER
+  // DATA
   // =========================
 
-  function getStorageKey(semester) {
-    return `campusflow-notes-semester-${semester}`;
-  }
-
-  function getNotesBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemesterNotes = localStorage.getItem(semesterKey);
-
-    // Jika semester sudah punya data sendiri
-    if (savedSemesterNotes !== null) {
-      return JSON.parse(savedSemesterNotes);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldNotes = localStorage.getItem("campusflow-notes");
-
-      if (oldNotes !== null) {
-        const parsedOldNotes = JSON.parse(oldNotes);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldNotes));
-
-        return parsedOldNotes;
-      }
-    }
-
-    // Semester baru masih kosong
-    return [];
-  }
-
-  // =========================
-  // DATA CATATAN
-  // =========================
-
-  const [notes, setNotes] = useState(() => {
-    return getNotesBySemester(activeSemester);
-  });
-
-  const [courses, setCourses] = useState(() => {
-    const savedCourses = localStorage.getItem(
-      `campusflow-courses-semester-${activeSemester}`,
-    );
-
-    return savedCourses ? JSON.parse(savedCourses) : [];
-  });
+  const [notes, setNotes] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // MODAL & SEARCH
   // =========================
 
   const [showForm, setShowForm] = useState(false);
-
   const [editingId, setEditingId] = useState(null);
-
   const [search, setSearch] = useState("");
 
   // =========================
@@ -75,40 +31,127 @@ function Notes({ activeSemester }) {
   });
 
   // =========================
-  // GANTI SEMESTER
+  // AMBIL USER
+  // =========================
+
+  async function getCurrentUser() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error("Gagal mengambil session:", error);
+      return null;
+    }
+
+    return session?.user || null;
+  }
+
+  // =========================
+  // AMBIL NOTES DARI SUPABASE
+  // =========================
+
+  async function fetchNotes() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setNotes([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("notes")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("Gagal mengambil notes:", error);
+        setNotes([]);
+        return;
+      }
+
+      const formattedNotes = (data || []).map((note) => ({
+        id: note.id,
+        title: note.title || "",
+        course: note.course || "",
+        type: note.type || "Catatan",
+        content: note.content || "",
+        link: note.link || "",
+        date: note.date || "",
+        createdAt: note.created_at,
+      }));
+
+      setNotes(formattedNotes);
+    } catch (error) {
+      console.error("Error fetchNotes:", error);
+      setNotes([]);
+    }
+  }
+
+  // =========================
+  // AMBIL COURSES DARI SUPABASE
+  // =========================
+
+  async function fetchCourses() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setCourses([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil courses:", error);
+        setCourses([]);
+        return;
+      }
+
+      setCourses(data || []);
+    } catch (error) {
+      console.error("Error fetchCourses Notes:", error);
+      setCourses([]);
+    }
+  }
+
+  // =========================
+  // LOAD DATA PER SEMESTER
   // =========================
 
   useEffect(() => {
-    const semesterNotes = getNotesBySemester(activeSemester);
+    async function loadData() {
+      setLoading(true);
 
-    setNotes(semesterNotes);
+      setSearch("");
+      setShowForm(false);
+      setEditingId(null);
 
-    // Reset pencarian
-    setSearch("");
+      setForm({
+        title: "",
+        course: "",
+        type: "Catatan",
+        content: "",
+        link: "",
+      });
 
-    // Tutup modal
-    setShowForm(false);
-    setEditingId(null);
+      await Promise.all([fetchNotes(), fetchCourses()]);
 
-    // Reset form
-    setForm({
-      title: "",
-      course: "",
-      type: "Catatan",
-      content: "",
-      link: "",
-    });
+      setLoading(false);
+    }
+
+    loadData();
   }, [activeSemester]);
-
-  // =========================
-  // SIMPAN KE LOCAL STORAGE
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(notes));
-  }, [notes, activeSemester]);
 
   // =========================
   // INPUT FORM
@@ -117,10 +160,10 @@ function Notes({ activeSemester }) {
   function handleChange(event) {
     const { name, value } = event.target;
 
-    setForm({
-      ...form,
+    setForm((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
   }
 
   // =========================
@@ -161,50 +204,91 @@ function Notes({ activeSemester }) {
   // SIMPAN CATATAN
   // =========================
 
-  function saveNote(event) {
+  async function saveNote(event) {
     event.preventDefault();
 
-    if (!form.title || !form.course || !form.content) {
+    if (!form.title.trim() || !form.course || !form.content.trim()) {
       alert("Lengkapi data catatan terlebih dahulu.");
-
       return;
     }
 
-    // EDIT
-    if (editingId !== null) {
-      const updatedNotes = notes.map((note) => {
-        if (note.id === editingId) {
-          return {
-            ...note,
-            ...form,
-          };
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
+
+      // =========================
+      // EDIT CATATAN
+      // =========================
+
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from("notes")
+          .update({
+            title: form.title.trim(),
+            course: form.course,
+            type: form.type,
+            content: form.content.trim(),
+            link: form.link.trim() || null,
+          })
+          .eq("id", editingId)
+          .eq("user_id", user.id);
+
+        if (error) {
+          console.error("Gagal mengedit catatan:", error);
+
+          alert("Gagal menyimpan perubahan: " + error.message);
+
+          return;
         }
+      }
 
-        return note;
-      });
+      // =========================
+      // TAMBAH CATATAN
+      // =========================
+      else {
+        const today = new Date().toISOString().split("T")[0];
 
-      setNotes(updatedNotes);
+        const { error } = await supabase.from("notes").insert([
+          {
+            user_id: user.id,
+            semester: Number(activeSemester),
+            title: form.title.trim(),
+            course: form.course,
+            type: form.type,
+            content: form.content.trim(),
+            link: form.link.trim() || null,
+            date: today,
+          },
+        ]);
+
+        if (error) {
+          console.error("Gagal menambah catatan:", error);
+
+          alert("Gagal menyimpan catatan: " + error.message);
+
+          return;
+        }
+      }
+
+      closeForm();
+
+      await fetchNotes();
+    } catch (error) {
+      console.error("Error saveNote:", error);
+
+      alert("Terjadi kesalahan saat menyimpan catatan.");
     }
-
-    // TAMBAH CATATAN BARU
-    else {
-      const newNote = {
-        id: Date.now(),
-        ...form,
-        createdAt: new Date().toISOString(),
-      };
-
-      setNotes([...notes, newNote]);
-    }
-
-    closeForm();
   }
 
   // =========================
   // HAPUS CATATAN
   // =========================
 
-  function deleteNote(id) {
+  async function deleteNote(id) {
     const confirmDelete = window.confirm(
       "Apakah kamu yakin ingin menghapus catatan ini?",
     );
@@ -213,9 +297,34 @@ function Notes({ activeSemester }) {
       return;
     }
 
-    const remainingNotes = notes.filter((note) => note.id !== id);
+    try {
+      const user = await getCurrentUser();
 
-    setNotes(remainingNotes);
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("notes")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal menghapus catatan:", error);
+
+        alert("Gagal menghapus catatan: " + error.message);
+
+        return;
+      }
+
+      await fetchNotes();
+    } catch (error) {
+      console.error("Error deleteNote:", error);
+
+      alert("Terjadi kesalahan saat menghapus catatan.");
+    }
   }
 
   // =========================
@@ -250,6 +359,30 @@ function Notes({ activeSemester }) {
       note.content.toLowerCase().includes(keyword)
     );
   });
+
+  // =========================
+  // LOADING
+  // =========================
+
+  if (loading) {
+    return (
+      <section className="notes-page">
+        <div className="page-header">
+          <div>
+            <span className="section-label">SEMESTER {activeSemester}</span>
+
+            <h2>Notes & Materials</h2>
+
+            <p>Memuat catatan...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // =========================
+  // RETURN
+  // =========================
 
   return (
     <section className="notes-page">

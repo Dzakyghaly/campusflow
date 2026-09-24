@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { supabase } from "./lib/supabase";
+
 import "./App.css";
 
 import Sidebar from "./components/Sidebar";
@@ -12,8 +14,34 @@ import Calendar from "./components/Calendar";
 import Notes from "./components/Notes";
 import Attendance from "./components/Attendance";
 import Grades from "./components/Grades";
+import Auth from "./components/Auth";
 
 function App() {
+  // =========================
+  // AUTH
+  // =========================
+
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // =========================
   // HALAMAN AKTIF
   // =========================
@@ -33,7 +61,15 @@ function App() {
   const [activeSemester, setActiveSemester] = useState(() => {
     const savedSemester = localStorage.getItem("campusflow-active-semester");
 
-    return savedSemester || "1";
+    if (
+      savedSemester &&
+      Number(savedSemester) >= 1 &&
+      Number(savedSemester) <= 8
+    ) {
+      return String(savedSemester);
+    }
+
+    return "1";
   });
 
   // =========================
@@ -73,8 +109,8 @@ function App() {
   function changePage(page) {
     setCurrentPage(page);
 
-    // Jika dibuka dari HP/tablet,
-    // sidebar otomatis tertutup setelah memilih menu
+    // Sidebar otomatis tertutup
+    // setelah memilih menu di HP/tablet
     setMobileMenuOpen(false);
   }
 
@@ -127,6 +163,28 @@ function App() {
       />
     );
   }
+
+  // =========================
+  // CEK LOGIN
+  // =========================
+
+  if (authLoading) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <h2>Memuat CampusFlow...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Auth />;
+  }
+
+  // =========================
+  // CAMPUSFLOW
+  // =========================
 
   return (
     <div className={`app-layout ${theme === "dark" ? "dark-mode" : ""}`}>

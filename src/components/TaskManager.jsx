@@ -1,83 +1,14 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function TaskManager({ activeSemester }) {
-  // =========================
-  // STORAGE KEY
-  // =========================
-
-  function getTaskStorageKey(semester) {
-    return `campusflow-tasks-semester-${semester}`;
-  }
-
-  function getCourseStorageKey(semester) {
-    return `campusflow-courses-semester-${semester}`;
-  }
-
-  // =========================
-  // AMBIL TUGAS PER SEMESTER
-  // =========================
-
-  function getTasksBySemester(semester) {
-    const semesterKey = getTaskStorageKey(semester);
-
-    const savedSemesterTasks = localStorage.getItem(semesterKey);
-
-    if (savedSemesterTasks !== null) {
-      return JSON.parse(savedSemesterTasks);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldTasks = localStorage.getItem("campusflow-tasks");
-
-      if (oldTasks !== null) {
-        const parsedOldTasks = JSON.parse(oldTasks);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldTasks));
-
-        return parsedOldTasks;
-      }
-    }
-
-    return [];
-  }
-
-  // =========================
-  // AMBIL COURSES PER SEMESTER
-  // =========================
-
-  function getCoursesBySemester(semester) {
-    const semesterKey = getCourseStorageKey(semester);
-
-    const savedCourses = localStorage.getItem(semesterKey);
-
-    if (savedCourses !== null) {
-      return JSON.parse(savedCourses);
-    }
-
-    // Cadangan data lama Semester 1
-    if (semester === "1") {
-      const oldCourses = localStorage.getItem("campusflow-courses");
-
-      if (oldCourses !== null) {
-        return JSON.parse(oldCourses);
-      }
-    }
-
-    return [];
-  }
-
   // =========================
   // DATA
   // =========================
 
-  const [courses, setCourses] = useState(() => {
-    return getCoursesBySemester(activeSemester);
-  });
-
-  const [tasks, setTasks] = useState(() => {
-    return getTasksBySemester(activeSemester);
-  });
+  const [courses, setCourses] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // FORM
@@ -95,19 +26,93 @@ function TaskManager({ activeSemester }) {
   });
 
   // =========================
+  // AMBIL DATA SUPABASE
+  // =========================
+
+  async function fetchData() {
+    try {
+      setLoading(true);
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+        setTasks([]);
+        setCourses([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setTasks([]);
+        setCourses([]);
+        return;
+      }
+
+      const userId = session.user.id;
+      const semester = Number(activeSemester);
+
+      // =========================
+      // AMBIL COURSES
+      // =========================
+
+      const { data: courseData, error: courseError } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("semester", semester)
+        .order("created_at", { ascending: true });
+
+      if (courseError) {
+        console.error("Gagal mengambil courses:", courseError);
+        setCourses([]);
+      } else {
+        setCourses(courseData || []);
+      }
+
+      // =========================
+      // AMBIL TASKS
+      // =========================
+
+      const { data: taskData, error: taskError } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("semester", semester)
+        .order("created_at", { ascending: false });
+
+      if (taskError) {
+        console.error("Gagal mengambil tasks:", taskError);
+        setTasks([]);
+      } else {
+        const formattedTasks = (taskData || []).map((task) => ({
+          ...task,
+          deadlineTime: task.deadline_time
+            ? task.deadline_time.slice(0, 5)
+            : "",
+        }));
+
+        setTasks(formattedTasks);
+      }
+    } catch (error) {
+      console.error("Error mengambil data Task Manager:", error);
+
+      setTasks([]);
+      setCourses([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // =========================
   // GANTI SEMESTER
   // =========================
 
   useEffect(() => {
-    const semesterTasks = getTasksBySemester(activeSemester);
+    fetchData();
 
-    const semesterCourses = getCoursesBySemester(activeSemester);
-
-    setTasks(semesterTasks);
-    setCourses(semesterCourses);
-
-    // Reset form supaya data semester lama
-    // tidak terbawa ke semester baru
     setShowForm(false);
 
     setForm({
@@ -119,16 +124,6 @@ function TaskManager({ activeSemester }) {
       status: "Belum",
     });
   }, [activeSemester]);
-
-  // =========================
-  // SIMPAN TUGAS
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getTaskStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(tasks));
-  }, [tasks, activeSemester]);
 
   // =========================
   // INPUT
@@ -181,58 +176,127 @@ function TaskManager({ activeSemester }) {
   // TAMBAH TUGAS
   // =========================
 
-  function addTask(event) {
+  async function addTask(event) {
     event.preventDefault();
 
     if (!form.title || !form.course || !form.deadline || !form.deadlineTime) {
       alert("Lengkapi data tugas dan waktu deadline terlebih dahulu.");
-
       return;
     }
 
-    const newTask = {
-      id: Date.now(),
-      ...form,
-    };
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    setTasks([...tasks, newTask]);
+      if (sessionError || !session?.user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
 
-    closeForm();
+      const { error } = await supabase.from("tasks").insert({
+        user_id: session.user.id,
+        semester: Number(activeSemester),
+        title: form.title,
+        course: form.course,
+        deadline: form.deadline,
+        deadline_time: form.deadlineTime,
+        priority: form.priority,
+        status: form.status,
+      });
+
+      if (error) {
+        console.error("Gagal menambahkan tugas:", error);
+        alert("Gagal menyimpan tugas: " + error.message);
+        return;
+      }
+
+      await fetchData();
+
+      closeForm();
+    } catch (error) {
+      console.error("Error menambahkan tugas:", error);
+      alert("Terjadi kesalahan saat menyimpan tugas.");
+    }
   }
 
   // =========================
   // UBAH STATUS
   // =========================
 
-  function changeStatus(id, newStatus) {
-    const updatedTasks = tasks.map((task) => {
-      if (task.id === id) {
-        return {
-          ...task,
-          status: newStatus,
-        };
+  async function changeStatus(id, newStatus) {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
       }
 
-      return task;
-    });
+      const { error } = await supabase
+        .from("tasks")
+        .update({
+          status: newStatus,
+        })
+        .eq("id", id)
+        .eq("user_id", session.user.id);
 
-    setTasks(updatedTasks);
+      if (error) {
+        console.error("Gagal mengubah status tugas:", error);
+        alert("Gagal mengubah status tugas: " + error.message);
+        return;
+      }
+
+      await fetchData();
+    } catch (error) {
+      console.error("Error mengubah status:", error);
+      alert("Terjadi kesalahan saat mengubah status tugas.");
+    }
   }
 
   // =========================
   // HAPUS
   // =========================
 
-  function deleteTask(id) {
+  async function deleteTask(id) {
     const confirmDelete = window.confirm("Hapus tugas ini?");
 
     if (!confirmDelete) {
       return;
     }
 
-    const remainingTasks = tasks.filter((task) => task.id !== id);
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    setTasks(remainingTasks);
+      if (sessionError || !session?.user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("tasks")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", session.user.id);
+
+      if (error) {
+        console.error("Gagal menghapus tugas:", error);
+        alert("Gagal menghapus tugas: " + error.message);
+        return;
+      }
+
+      await fetchData();
+    } catch (error) {
+      console.error("Error menghapus tugas:", error);
+      alert("Terjadi kesalahan saat menghapus tugas.");
+    }
   }
 
   // =========================
@@ -266,13 +330,11 @@ function TaskManager({ activeSemester }) {
       <div className="task-summary">
         <div className="summary-card">
           <span>Total Tugas</span>
-
           <strong>{tasks.length}</strong>
         </div>
 
         <div className="summary-card red-summary">
           <span>Belum</span>
-
           <strong>
             {tasks.filter((task) => task.status === "Belum").length}
           </strong>
@@ -280,7 +342,6 @@ function TaskManager({ activeSemester }) {
 
         <div className="summary-card yellow-summary">
           <span>Proses</span>
-
           <strong>
             {tasks.filter((task) => task.status === "Proses").length}
           </strong>
@@ -288,132 +349,139 @@ function TaskManager({ activeSemester }) {
 
         <div className="summary-card green-summary">
           <span>Selesai</span>
-
           <strong>{completedTasks.length}</strong>
         </div>
       </div>
 
-      {/* ACTIVE TASKS */}
+      {/* LOADING */}
 
-      <div className="task-section">
-        <div className="task-section-title">
-          <div>
-            <span className="section-label">ACTIVE</span>
-
-            <h3>Tugas Aktif</h3>
-          </div>
-
-          <span>{activeTasks.length} tugas</span>
+      {loading ? (
+        <div className="empty-task">
+          <h3>Memuat tugas...</h3>
+          <p>Mengambil data dari CampusFlow.</p>
         </div>
+      ) : (
+        <>
+          {/* ACTIVE TASKS */}
 
-        {activeTasks.length === 0 ? (
-          <div className="empty-task">
-            <div className="empty-icon">✓</div>
-
-            <h3>Tidak ada tugas aktif</h3>
-
-            <p>Belum ada tugas aktif untuk Semester {activeSemester}.</p>
-          </div>
-        ) : (
-          <div className="task-manager-list">
-            {activeTasks.map((task) => (
-              <div className="task-manager-card" key={task.id}>
-                <div
-                  className={`status-indicator ${
-                    task.status === "Belum" ? "status-red" : "status-yellow"
-                  }`}
-                ></div>
-
-                <div className="task-main-info">
-                  <div className="task-top">
-                    <div>
-                      <h3>{task.title}</h3>
-
-                      <p>{task.course}</p>
-                    </div>
-
-                    <span
-                      className={`priority-badge priority-${task.priority.toLowerCase()}`}
-                    >
-                      {task.priority}
-                    </span>
-                  </div>
-
-                  <div className="task-meta">
-                    <span>
-                      Deadline: {task.deadline}
-                      {task.deadlineTime ? ` • ${task.deadlineTime}` : ""}
-                    </span>
-
-                    <span>Status: {task.status}</span>
-                  </div>
-
-                  <div className="task-actions">
-                    {task.status === "Belum" && (
-                      <button
-                        className="process-button"
-                        onClick={() => changeStatus(task.id, "Proses")}
-                      >
-                        Mulai Kerjakan
-                      </button>
-                    )}
-
-                    {task.status === "Proses" && (
-                      <button
-                        className="complete-button"
-                        onClick={() => changeStatus(task.id, "Selesai")}
-                      >
-                        ✓ Tandai Selesai
-                      </button>
-                    )}
-
-                    <button
-                      className="delete-button"
-                      onClick={() => deleteTask(task.id)}
-                    >
-                      Hapus
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* HISTORY */}
-
-      <div className="task-section history-section">
-        <div className="task-section-title">
-          <div>
-            <span className="section-label">HISTORY</span>
-
-            <h3>Riwayat Tugas</h3>
-          </div>
-
-          <span>{completedTasks.length} selesai</span>
-        </div>
-
-        {completedTasks.length === 0 ? (
-          <p className="history-empty">
-            Belum ada tugas yang selesai pada Semester {activeSemester}.
-          </p>
-        ) : (
-          completedTasks.map((task) => (
-            <div className="history-task" key={task.id}>
-              <div className="history-check">✓</div>
-
+          <div className="task-section">
+            <div className="task-section-title">
               <div>
-                <strong>{task.title}</strong>
-
-                <span>{task.course}</span>
+                <span className="section-label">ACTIVE</span>
+                <h3>Tugas Aktif</h3>
               </div>
 
-              <button onClick={() => deleteTask(task.id)}>Hapus</button>
+              <span>{activeTasks.length} tugas</span>
             </div>
-          ))
-        )}
-      </div>
+
+            {activeTasks.length === 0 ? (
+              <div className="empty-task">
+                <div className="empty-icon">✓</div>
+
+                <h3>Tidak ada tugas aktif</h3>
+
+                <p>Belum ada tugas aktif untuk Semester {activeSemester}.</p>
+              </div>
+            ) : (
+              <div className="task-manager-list">
+                {activeTasks.map((task) => (
+                  <div className="task-manager-card" key={task.id}>
+                    <div
+                      className={`status-indicator ${
+                        task.status === "Belum" ? "status-red" : "status-yellow"
+                      }`}
+                    ></div>
+
+                    <div className="task-main-info">
+                      <div className="task-top">
+                        <div>
+                          <h3>{task.title}</h3>
+                          <p>{task.course}</p>
+                        </div>
+
+                        <span
+                          className={`priority-badge priority-${task.priority.toLowerCase()}`}
+                        >
+                          {task.priority}
+                        </span>
+                      </div>
+
+                      <div className="task-meta">
+                        <span>
+                          Deadline: {task.deadline}
+                          {task.deadlineTime ? ` • ${task.deadlineTime}` : ""}
+                        </span>
+
+                        <span>Status: {task.status}</span>
+                      </div>
+
+                      <div className="task-actions">
+                        {task.status === "Belum" && (
+                          <button
+                            className="process-button"
+                            onClick={() => changeStatus(task.id, "Proses")}
+                          >
+                            Mulai Kerjakan
+                          </button>
+                        )}
+
+                        {task.status === "Proses" && (
+                          <button
+                            className="complete-button"
+                            onClick={() => changeStatus(task.id, "Selesai")}
+                          >
+                            ✓ Tandai Selesai
+                          </button>
+                        )}
+
+                        <button
+                          className="delete-button"
+                          onClick={() => deleteTask(task.id)}
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* HISTORY */}
+
+          <div className="task-section history-section">
+            <div className="task-section-title">
+              <div>
+                <span className="section-label">HISTORY</span>
+
+                <h3>Riwayat Tugas</h3>
+              </div>
+
+              <span>{completedTasks.length} selesai</span>
+            </div>
+
+            {completedTasks.length === 0 ? (
+              <p className="history-empty">
+                Belum ada tugas yang selesai pada Semester {activeSemester}.
+              </p>
+            ) : (
+              completedTasks.map((task) => (
+                <div className="history-task" key={task.id}>
+                  <div className="history-check">✓</div>
+
+                  <div>
+                    <strong>{task.title}</strong>
+                    <span>{task.course}</span>
+                  </div>
+
+                  <button onClick={() => deleteTask(task.id)}>Hapus</button>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
 
       {/* MODAL */}
 
@@ -512,7 +580,6 @@ function TaskManager({ activeSemester }) {
                     onChange={handleChange}
                   >
                     <option value="Belum">Belum</option>
-
                     <option value="Proses">Proses</option>
                   </select>
                 </div>

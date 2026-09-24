@@ -1,55 +1,19 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Calendar({ activeSemester }) {
-  // =========================
-  // STORAGE PER SEMESTER
-  // =========================
-
-  function getStorageKey(semester) {
-    return `campusflow-calendar-semester-${semester}`;
-  }
-
-  function getEventsBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemesterEvents = localStorage.getItem(semesterKey);
-
-    // Jika semester ini sudah punya data
-    if (savedSemesterEvents !== null) {
-      return JSON.parse(savedSemesterEvents);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldEvents = localStorage.getItem("campusflow-calendar");
-
-      if (oldEvents !== null) {
-        const parsedOldEvents = JSON.parse(oldEvents);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldEvents));
-
-        return parsedOldEvents;
-      }
-    }
-
-    // Semester baru masih kosong
-    return [];
-  }
-
   // =========================
   // DATA EVENT
   // =========================
 
-  const [events, setEvents] = useState(() => {
-    return getEventsBySemester(activeSemester);
-  });
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // FORM
   // =========================
 
   const [showForm, setShowForm] = useState(false);
-
   const [editingId, setEditingId] = useState(null);
 
   const [form, setForm] = useState({
@@ -60,14 +24,81 @@ function Calendar({ activeSemester }) {
   });
 
   // =========================
-  // SIMPAN LOCAL STORAGE
+  // AMBIL USER LOGIN
+  // =========================
+
+  async function getCurrentUser() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error("Gagal mengambil session:", error);
+      return null;
+    }
+
+    return session?.user || null;
+  }
+
+  // =========================
+  // AMBIL EVENT DARI SUPABASE
+  // =========================
+
+  async function fetchEvents() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setEvents([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("calendar_events")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("date", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil calendar events:", error);
+        setEvents([]);
+        return;
+      }
+
+      setEvents(data || []);
+    } catch (error) {
+      console.error("Error fetchEvents:", error);
+      setEvents([]);
+    }
+  }
+
+  // =========================
+  // LOAD DATA PER SEMESTER
   // =========================
 
   useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
+    async function loadData() {
+      setLoading(true);
 
-    localStorage.setItem(semesterKey, JSON.stringify(events));
-  }, [events, activeSemester]);
+      setShowForm(false);
+      setEditingId(null);
+
+      setForm({
+        title: "",
+        date: "",
+        type: "Kuliah",
+        description: "",
+      });
+
+      await fetchEvents();
+
+      setLoading(false);
+    }
+
+    loadData();
+  }, [activeSemester]);
 
   // =========================
   // INPUT
@@ -76,10 +107,10 @@ function Calendar({ activeSemester }) {
   function handleChange(event) {
     const { name, value } = event.target;
 
-    setForm({
-      ...form,
+    setForm((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
   }
 
   // =========================
@@ -119,53 +150,92 @@ function Calendar({ activeSemester }) {
   // SIMPAN EVENT
   // =========================
 
-  function saveEvent(event) {
+  async function saveEvent(event) {
     event.preventDefault();
 
     if (!form.title || !form.date) {
       alert("Nama kegiatan dan tanggal wajib diisi.");
-
       return;
     }
 
-    // EDIT
-    if (editingId !== null) {
-      const updatedEvents = events.map((item) =>
-        item.id === editingId
-          ? {
-              ...item,
-              ...form,
-            }
-          : item,
-      );
+    try {
+      const user = await getCurrentUser();
 
-      setEvents(updatedEvents);
+      if (!user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
+
+      // =========================
+      // EDIT EVENT
+      // =========================
+
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from("calendar_events")
+          .update({
+            title: form.title,
+            date: form.date,
+            type: form.type,
+            description: form.description,
+          })
+          .eq("id", editingId)
+          .eq("user_id", user.id);
+
+        if (error) {
+          console.error("Gagal mengedit kegiatan:", error);
+
+          alert("Gagal menyimpan perubahan: " + error.message);
+
+          return;
+        }
+      }
+
+      // =========================
+      // TAMBAH EVENT
+      // =========================
+      else {
+        const { error } = await supabase.from("calendar_events").insert([
+          {
+            user_id: user.id,
+            semester: Number(activeSemester),
+            title: form.title,
+            date: form.date,
+            type: form.type,
+            description: form.description,
+          },
+        ]);
+
+        if (error) {
+          console.error("Gagal menambah kegiatan:", error);
+
+          alert("Gagal menyimpan kegiatan: " + error.message);
+
+          return;
+        }
+      }
+
+      closeForm();
+
+      await fetchEvents();
+    } catch (error) {
+      console.error("Error saveEvent:", error);
+
+      alert("Terjadi kesalahan saat menyimpan kegiatan.");
     }
-
-    // TAMBAH
-    else {
-      const newEvent = {
-        id: Date.now(),
-        ...form,
-      };
-
-      setEvents([...events, newEvent]);
-    }
-
-    closeForm();
   }
 
   // =========================
-  // EDIT
+  // EDIT EVENT
   // =========================
 
   function editEvent(item) {
     setEditingId(item.id);
 
     setForm({
-      title: item.title,
-      date: item.date,
-      type: item.type,
+      title: item.title || "",
+      date: item.date || "",
+      type: item.type || "Kuliah",
       description: item.description || "",
     });
 
@@ -173,17 +243,44 @@ function Calendar({ activeSemester }) {
   }
 
   // =========================
-  // HAPUS
+  // HAPUS EVENT
   // =========================
 
-  function deleteEvent(id) {
+  async function deleteEvent(id) {
     const confirmDelete = window.confirm("Hapus kegiatan ini?");
 
     if (!confirmDelete) {
       return;
     }
 
-    setEvents(events.filter((item) => item.id !== id));
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("calendar_events")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal menghapus kegiatan:", error);
+
+        alert("Gagal menghapus kegiatan: " + error.message);
+
+        return;
+      }
+
+      await fetchEvents();
+    } catch (error) {
+      console.error("Error deleteEvent:", error);
+
+      alert("Terjadi kesalahan saat menghapus kegiatan.");
+    }
   }
 
   // =========================
@@ -191,20 +288,64 @@ function Calendar({ activeSemester }) {
   // =========================
 
   const sortedEvents = [...events].sort(
-    (a, b) => new Date(a.date) - new Date(b.date),
+    (a, b) => new Date(a.date + "T00:00:00") - new Date(b.date + "T00:00:00"),
   );
+
+  // =========================
+  // CARI KEGIATAN TERDEKAT
+  // =========================
+
+  const today = new Date();
+
+  today.setHours(0, 0, 0, 0);
+
+  const upcomingEvents = sortedEvents.filter((item) => {
+    const eventDate = new Date(item.date + "T00:00:00");
+
+    return eventDate >= today;
+  });
+
+  const nearestEvent = upcomingEvents.length > 0 ? upcomingEvents[0] : null;
 
   // =========================
   // FORMAT TANGGAL
   // =========================
 
   function formatDate(date) {
+    if (!date) {
+      return "-";
+    }
+
     return new Date(date + "T00:00:00").toLocaleDateString("id-ID", {
       day: "numeric",
       month: "long",
       year: "numeric",
     });
   }
+
+  // =========================
+  // LOADING
+  // =========================
+
+  if (loading) {
+    return (
+      <section className="calendar-page">
+        <div className="page-header">
+          <div>
+            <span className="section-label">SEMESTER {activeSemester}</span>
+
+            <h2>Kalender Akademik</h2>
+
+            <p>Memuat kegiatan...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // =========================
+  // RETURN
+  // =========================
 
   return (
     <section className="calendar-page">
@@ -238,11 +379,11 @@ function Calendar({ activeSemester }) {
         <div>
           <span>KEGIATAN TERDEKAT</span>
 
-          <strong>
-            {sortedEvents.length > 0 ? formatDate(sortedEvents[0].date) : "-"}
-          </strong>
+          <strong>{nearestEvent ? formatDate(nearestEvent.date) : "-"}</strong>
 
-          <p>Agenda berikutnya</p>
+          <p>
+            {nearestEvent ? nearestEvent.title : "Belum ada agenda berikutnya"}
+          </p>
         </div>
       </div>
 

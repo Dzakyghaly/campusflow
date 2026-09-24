@@ -1,63 +1,20 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Attendance({ activeSemester }) {
   // =========================
-  // STORAGE PER SEMESTER
+  // DATA
   // =========================
 
-  function getStorageKey(semester) {
-    return `campusflow-attendance-semester-${semester}`;
-  }
-
-  function getAttendanceBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemesterAttendance = localStorage.getItem(semesterKey);
-
-    // Jika semester sudah punya data sendiri
-    if (savedSemesterAttendance !== null) {
-      return JSON.parse(savedSemesterAttendance);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldAttendance = localStorage.getItem("campusflow-attendance");
-
-      if (oldAttendance !== null) {
-        const parsedOldAttendance = JSON.parse(oldAttendance);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldAttendance));
-
-        return parsedOldAttendance;
-      }
-    }
-
-    // Semester baru masih kosong
-    return [];
-  }
-
-  // =========================
-  // DATA PRESENSI
-  // =========================
-
-  const [attendance, setAttendance] = useState(() => {
-    return getAttendanceBySemester(activeSemester);
-  });
-
-  const [courses, setCourses] = useState(() => {
-    const savedCourses = localStorage.getItem(
-      `campusflow-courses-semester-${activeSemester}`,
-    );
-
-    return savedCourses ? JSON.parse(savedCourses) : [];
-  });
+  const [attendance, setAttendance] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // =========================
   // MODAL
   // =========================
 
   const [showForm, setShowForm] = useState(false);
-
   const [editingId, setEditingId] = useState(null);
 
   // =========================
@@ -72,35 +29,123 @@ function Attendance({ activeSemester }) {
   });
 
   // =========================
-  // GANTI SEMESTER
+  // AMBIL USER
+  // =========================
+
+  async function getCurrentUser() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error("Gagal mengambil session:", error);
+      return null;
+    }
+
+    return session?.user || null;
+  }
+
+  // =========================
+  // AMBIL ATTENDANCE
+  // =========================
+
+  async function fetchAttendance() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setAttendance([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("attendance")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("date", { ascending: true })
+        .order("meeting", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil attendance:", error);
+        setAttendance([]);
+        return;
+      }
+
+      const formattedAttendance = (data || []).map((item) => ({
+        id: item.id,
+        course: item.course || "",
+        date: item.date || "",
+        meeting: item.meeting?.toString() || "",
+        status: item.status || "Hadir",
+      }));
+
+      setAttendance(formattedAttendance);
+    } catch (error) {
+      console.error("Error fetchAttendance:", error);
+      setAttendance([]);
+    }
+  }
+
+  // =========================
+  // AMBIL COURSES
+  // =========================
+
+  async function fetchCourses() {
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        setCourses([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Gagal mengambil courses:", error);
+        setCourses([]);
+        return;
+      }
+
+      setCourses(data || []);
+    } catch (error) {
+      console.error("Error fetchCourses Attendance:", error);
+      setCourses([]);
+    }
+  }
+
+  // =========================
+  // LOAD DATA PER SEMESTER
   // =========================
 
   useEffect(() => {
-    const semesterAttendance = getAttendanceBySemester(activeSemester);
+    async function loadData() {
+      setLoading(true);
 
-    setAttendance(semesterAttendance);
+      setShowForm(false);
+      setEditingId(null);
 
-    // Tutup form ketika semester berubah
-    setShowForm(false);
-    setEditingId(null);
+      setForm({
+        course: "",
+        date: "",
+        meeting: "",
+        status: "Hadir",
+      });
 
-    setForm({
-      course: "",
-      date: "",
-      meeting: "",
-      status: "Hadir",
-    });
+      await Promise.all([fetchAttendance(), fetchCourses()]);
+
+      setLoading(false);
+    }
+
+    loadData();
   }, [activeSemester]);
-
-  // =========================
-  // SIMPAN KE LOCAL STORAGE
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(attendance));
-  }, [attendance, activeSemester]);
 
   // =========================
   // INPUT FORM
@@ -109,10 +154,10 @@ function Attendance({ activeSemester }) {
   function handleChange(event) {
     const { name, value } = event.target;
 
-    setForm({
-      ...form,
+    setForm((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
   }
 
   // =========================
@@ -152,42 +197,78 @@ function Attendance({ activeSemester }) {
   // SIMPAN PRESENSI
   // =========================
 
-  function saveAttendance(event) {
+  async function saveAttendance(event) {
     event.preventDefault();
 
     if (!form.course || !form.date || !form.meeting) {
       alert("Lengkapi data presensi terlebih dahulu.");
-
       return;
     }
 
-    // EDIT
-    if (editingId !== null) {
-      const updatedAttendance = attendance.map((item) => {
-        if (item.id === editingId) {
-          return {
-            ...item,
-            ...form,
-          };
+    try {
+      const user = await getCurrentUser();
+
+      if (!user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
+        return;
+      }
+
+      // =========================
+      // EDIT
+      // =========================
+
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from("attendance")
+          .update({
+            course: form.course,
+            date: form.date,
+            meeting: Number(form.meeting),
+            status: form.status,
+          })
+          .eq("id", editingId)
+          .eq("user_id", user.id);
+
+        if (error) {
+          console.error("Gagal mengedit presensi:", error);
+
+          alert("Gagal menyimpan perubahan: " + error.message);
+
+          return;
         }
+      }
 
-        return item;
-      });
+      // =========================
+      // TAMBAH BARU
+      // =========================
+      else {
+        const { error } = await supabase.from("attendance").insert([
+          {
+            user_id: user.id,
+            semester: Number(activeSemester),
+            course: form.course,
+            date: form.date,
+            meeting: Number(form.meeting),
+            status: form.status,
+          },
+        ]);
 
-      setAttendance(updatedAttendance);
+        if (error) {
+          console.error("Gagal menambah presensi:", error);
+
+          alert("Gagal menyimpan presensi: " + error.message);
+
+          return;
+        }
+      }
+
+      closeForm();
+      await fetchAttendance();
+    } catch (error) {
+      console.error("Error saveAttendance:", error);
+
+      alert("Terjadi kesalahan saat menyimpan presensi.");
     }
-
-    // TAMBAH DATA BARU
-    else {
-      const newAttendance = {
-        id: Date.now(),
-        ...form,
-      };
-
-      setAttendance([...attendance, newAttendance]);
-    }
-
-    closeForm();
   }
 
   // =========================
@@ -211,7 +292,7 @@ function Attendance({ activeSemester }) {
   // HAPUS PRESENSI
   // =========================
 
-  function deleteAttendance(id) {
+  async function deleteAttendance(id) {
     const confirmDelete = window.confirm(
       "Apakah kamu yakin ingin menghapus data presensi ini?",
     );
@@ -220,9 +301,34 @@ function Attendance({ activeSemester }) {
       return;
     }
 
-    const remainingAttendance = attendance.filter((item) => item.id !== id);
+    try {
+      const user = await getCurrentUser();
 
-    setAttendance(remainingAttendance);
+      if (!user) {
+        alert("Sesi login tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("attendance")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Gagal menghapus presensi:", error);
+
+        alert("Gagal menghapus presensi: " + error.message);
+
+        return;
+      }
+
+      await fetchAttendance();
+    } catch (error) {
+      console.error("Error deleteAttendance:", error);
+
+      alert("Terjadi kesalahan saat menghapus presensi.");
+    }
   }
 
   // =========================
@@ -249,6 +355,30 @@ function Attendance({ activeSemester }) {
     totalAttendance > 0
       ? Math.round((totalPresent / totalAttendance) * 100)
       : 0;
+
+  // =========================
+  // LOADING
+  // =========================
+
+  if (loading) {
+    return (
+      <section className="attendance-page">
+        <div className="page-header">
+          <div>
+            <span className="section-label">SEMESTER {activeSemester}</span>
+
+            <h2>Attendance</h2>
+
+            <p>Memuat data kehadiran...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // =========================
+  // RETURN
+  // =========================
 
   return (
     <section className="attendance-page">
@@ -352,10 +482,7 @@ function Attendance({ activeSemester }) {
 
                 <h3>{item.course}</h3>
 
-                <p>
-                  Pertemuan ke-
-                  {item.meeting}
-                </p>
+                <p>Pertemuan ke-{item.meeting}</p>
 
                 <span className="attendance-date">{item.date}</span>
               </div>

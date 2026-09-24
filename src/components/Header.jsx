@@ -1,21 +1,36 @@
 import { useEffect, useRef, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   // =========================
-  // WAKTU SEKARANG
+  // DATA
   // =========================
 
   const [now, setNow] = useState(new Date());
 
-  // =========================
-  // NOTIFICATION DROPDOWN
-  // =========================
+  const [tasks, setTasks] = useState([]);
+  const [schedules, setSchedules] = useState([]);
 
   const [showNotifications, setShowNotifications] = useState(false);
 
   const notificationRef = useRef(null);
 
-  // Update waktu setiap 30 detik
+  // =========================
+  // LOGOUT
+  // =========================
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      alert("Gagal keluar dari akun: " + error.message);
+    }
+  };
+
+  // =========================
+  // UPDATE WAKTU
+  // =========================
+
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(new Date());
@@ -24,7 +39,11 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
     return () => clearInterval(interval);
   }, []);
 
-  // Tutup dropdown ketika klik di luar
+  // =========================
+  // TUTUP NOTIFIKASI
+  // KETIKA KLIK DI LUAR
+  // =========================
+
   useEffect(() => {
     function handleClickOutside(event) {
       if (
@@ -41,6 +60,124 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, []);
+
+  // =========================
+  // AMBIL TASKS DARI SUPABASE
+  // =========================
+
+  async function fetchTasks() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        setTasks([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester));
+
+      if (error) {
+        console.error("Gagal mengambil tasks untuk notifikasi:", error);
+
+        setTasks([]);
+        return;
+      }
+
+      const formattedTasks = (data || []).map((task) => ({
+        ...task,
+
+        deadlineTime: task.deadline_time ? task.deadline_time.slice(0, 5) : "",
+      }));
+
+      setTasks(formattedTasks);
+    } catch (error) {
+      console.error("Error fetch tasks notification:", error);
+
+      setTasks([]);
+    }
+  }
+
+  // =========================
+  // AMBIL SCHEDULE DARI SUPABASE
+  // =========================
+
+  async function fetchSchedules() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        setSchedules([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("schedules")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester));
+
+      if (error) {
+        console.error("Gagal mengambil schedule untuk notifikasi:", error);
+
+        setSchedules([]);
+        return;
+      }
+
+      const formattedSchedules = (data || []).map((schedule) => ({
+        ...schedule,
+
+        startTime: schedule.start_time ? schedule.start_time.slice(0, 5) : "",
+
+        endTime: schedule.end_time ? schedule.end_time.slice(0, 5) : "",
+      }));
+
+      setSchedules(formattedSchedules);
+    } catch (error) {
+      console.error("Error fetch schedules notification:", error);
+
+      setSchedules([]);
+    }
+  }
+
+  // =========================
+  // AMBIL DATA NOTIFIKASI
+  // =========================
+
+  async function fetchNotificationData() {
+    await Promise.all([fetchTasks(), fetchSchedules()]);
+  }
+
+  // =========================
+  // AMBIL DATA SAAT
+  // SEMESTER BERUBAH
+  // =========================
+
+  useEffect(() => {
+    fetchNotificationData();
+  }, [activeSemester]);
+
+  // =========================
+  // REFRESH DATA OTOMATIS
+  // SETIAP 30 DETIK
+  // =========================
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchNotificationData();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [activeSemester]);
 
   // =========================
   // SAPAAN
@@ -71,35 +208,8 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
 
   function handleSemesterChange(event) {
     changeSemester(event.target.value);
+
     setShowNotifications(false);
-  }
-
-  // =========================
-  // AMBIL DATA
-  // =========================
-
-  function getTasks() {
-    try {
-      const savedTasks = localStorage.getItem(
-        `campusflow-tasks-semester-${activeSemester}`,
-      );
-
-      return savedTasks ? JSON.parse(savedTasks) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function getSchedules() {
-    try {
-      const savedSchedules = localStorage.getItem(
-        `campusflow-schedules-semester-${activeSemester}`,
-      );
-
-      return savedSchedules ? JSON.parse(savedSchedules) : [];
-    } catch {
-      return [];
-    }
   }
 
   // =========================
@@ -107,8 +217,6 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   // =========================
 
   function getTaskNotifications() {
-    const tasks = getTasks();
-
     return tasks
       .filter((task) => {
         return task.status !== "Selesai" && task.deadline && task.deadlineTime;
@@ -139,8 +247,6 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   // =========================
 
   function getScheduleNotifications() {
-    const schedules = getSchedules();
-
     const dayNames = [
       "Minggu",
       "Senin",
@@ -191,6 +297,10 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
     ...getScheduleNotifications(),
   ].sort((a, b) => a.minutesLeft - b.minutesLeft);
 
+  // =========================
+  // RETURN
+  // =========================
+
   return (
     <header className="header">
       <div>
@@ -200,7 +310,9 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
       </div>
 
       <div className="header-actions">
-        {/* THEME */}
+        {/* =========================
+            THEME
+        ========================= */}
 
         <button
           type="button"
@@ -213,7 +325,9 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
           <span className="theme-icon">{theme === "light" ? "🌙" : "☀️"}</span>
         </button>
 
-        {/* NOTIFICATION */}
+        {/* =========================
+            NOTIFICATION
+        ========================= */}
 
         <div className="notification-wrapper" ref={notificationRef}>
           <button
@@ -234,6 +348,7 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
               <div className="notification-header">
                 <div>
                   <span>NOTIFICATION CENTER</span>
+
                   <h3>Notifikasi</h3>
                 </div>
 
@@ -298,7 +413,9 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
           )}
         </div>
 
-        {/* PROFILE */}
+        {/* =========================
+            PROFILE
+        ========================= */}
 
         <div className="profile">
           <div className="profile-avatar">D</div>
@@ -329,6 +446,19 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
             </select>
           </div>
         </div>
+
+        {/* =========================
+            LOGOUT
+        ========================= */}
+
+        <button
+          type="button"
+          className="logout-button"
+          onClick={handleLogout}
+          title="Keluar dari akun"
+        >
+          Keluar
+        </button>
       </div>
     </header>
   );

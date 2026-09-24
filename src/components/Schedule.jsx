@@ -1,42 +1,8 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 function Schedule({ activeSemester }) {
   const days = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
-
-  // =========================
-  // STORAGE PER SEMESTER
-  // =========================
-
-  function getStorageKey(semester) {
-    return `campusflow-schedules-semester-${semester}`;
-  }
-
-  function getSchedulesBySemester(semester) {
-    const semesterKey = getStorageKey(semester);
-
-    const savedSemesterSchedules = localStorage.getItem(semesterKey);
-
-    // Kalau semester sudah punya data
-    if (savedSemesterSchedules !== null) {
-      return JSON.parse(savedSemesterSchedules);
-    }
-
-    // Migrasi data lama ke Semester 1
-    if (semester === "1") {
-      const oldSchedules = localStorage.getItem("campusflow-schedules");
-
-      if (oldSchedules !== null) {
-        const parsedOldSchedules = JSON.parse(oldSchedules);
-
-        localStorage.setItem(semesterKey, JSON.stringify(parsedOldSchedules));
-
-        return parsedOldSchedules;
-      }
-    }
-
-    // Semester baru masih kosong
-    return [];
-  }
 
   // =========================
   // STATE
@@ -48,17 +14,11 @@ function Schedule({ activeSemester }) {
 
   const [editingId, setEditingId] = useState(null);
 
-  const [schedules, setSchedules] = useState(() => {
-    return getSchedulesBySemester(activeSemester);
-  });
+  const [schedules, setSchedules] = useState([]);
 
-  const [courses, setCourses] = useState(() => {
-    const savedCourses = localStorage.getItem(
-      `campusflow-courses-semester-${activeSemester}`,
-    );
+  const [courses, setCourses] = useState([]);
 
-    return savedCourses ? JSON.parse(savedCourses) : [];
-  });
+  const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState({
     course: "",
@@ -70,20 +30,132 @@ function Schedule({ activeSemester }) {
   });
 
   // =========================
+  // AMBIL COURSES DARI SUPABASE
+  // =========================
+
+  async function fetchCourses() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+
+        setCourses([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setCourses([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("created_at", {
+          ascending: true,
+        });
+
+      if (error) {
+        console.error("Gagal mengambil courses:", error);
+
+        setCourses([]);
+        return;
+      }
+
+      setCourses(data || []);
+    } catch (error) {
+      console.error("Error mengambil courses:", error);
+
+      setCourses([]);
+    }
+  }
+
+  // =========================
+  // AMBIL SCHEDULE DARI SUPABASE
+  // =========================
+
+  async function fetchSchedules() {
+    try {
+      setLoading(true);
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("Gagal mengambil session:", sessionError);
+
+        setSchedules([]);
+        return;
+      }
+
+      if (!session?.user) {
+        setSchedules([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("schedules")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("semester", Number(activeSemester))
+        .order("start_time", {
+          ascending: true,
+        });
+
+      if (error) {
+        console.error("Gagal mengambil schedules:", error);
+
+        setSchedules([]);
+        return;
+      }
+
+      const formattedSchedules = (data || []).map((schedule) => ({
+        ...schedule,
+
+        startTime: schedule.start_time ? schedule.start_time.slice(0, 5) : "",
+
+        endTime: schedule.end_time ? schedule.end_time.slice(0, 5) : "",
+      }));
+
+      setSchedules(formattedSchedules);
+    } catch (error) {
+      console.error("Error mengambil schedules:", error);
+
+      setSchedules([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // =========================
+  // AMBIL SEMUA DATA
+  // =========================
+
+  async function fetchData() {
+    await Promise.all([fetchCourses(), fetchSchedules()]);
+  }
+
+  // =========================
   // GANTI SEMESTER
   // =========================
 
   useEffect(() => {
-    const semesterSchedules = getSchedulesBySemester(activeSemester);
-
-    setSchedules(semesterSchedules);
+    fetchData();
 
     // Kembali ke Senin ketika semester diganti
     setSelectedDay("Senin");
 
-    // Tutup form supaya data semester
-    // sebelumnya tidak terbawa
+    // Tutup form
     setShowForm(false);
+
     setEditingId(null);
 
     setForm({
@@ -97,16 +169,6 @@ function Schedule({ activeSemester }) {
   }, [activeSemester]);
 
   // =========================
-  // SIMPAN LOCAL STORAGE
-  // =========================
-
-  useEffect(() => {
-    const semesterKey = getStorageKey(activeSemester);
-
-    localStorage.setItem(semesterKey, JSON.stringify(schedules));
-  }, [schedules, activeSemester]);
-
-  // =========================
   // INPUT
   // =========================
 
@@ -118,6 +180,10 @@ function Schedule({ activeSemester }) {
       [name]: value,
     });
   }
+
+  // =========================
+  // PILIH MATA KULIAH
+  // =========================
 
   function handleCourseChange(event) {
     const selectedCourseName = event.target.value;
@@ -139,8 +205,11 @@ function Schedule({ activeSemester }) {
 
     setForm({
       ...form,
+
       course: selectedCourse.name,
+
       lecturer: selectedCourse.lecturer || "",
+
       room: selectedCourse.room || "",
     });
   }
@@ -187,6 +256,7 @@ function Schedule({ activeSemester }) {
 
   function closeForm() {
     setShowForm(false);
+
     resetForm();
   }
 
@@ -194,7 +264,7 @@ function Schedule({ activeSemester }) {
   // SIMPAN JADWAL
   // =========================
 
-  function saveSchedule(event) {
+  async function saveSchedule(event) {
     event.preventDefault();
 
     if (
@@ -214,45 +284,93 @@ function Schedule({ activeSemester }) {
       return;
     }
 
-    // EDIT
-    if (editingId !== null) {
-      const updatedSchedules = schedules.map((schedule) => {
-        if (schedule.id === editingId) {
-          return {
-            ...schedule,
-            ...form,
-          };
-        }
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-        return schedule;
-      });
+      if (sessionError || !session?.user) {
+        alert("Sesi login tidak ditemukan. Silakan login kembali.");
 
-      setSchedules(updatedSchedules);
-    }
+        return;
+      }
 
-    // TAMBAH
-    else {
-      const newSchedule = {
-        id: Date.now(),
-        ...form,
+      const scheduleData = {
+        user_id: session.user.id,
+
+        semester: Number(activeSemester),
+
+        course: form.course,
+
+        lecturer: form.lecturer,
+
+        room: form.room,
+
+        day: form.day,
+
+        start_time: form.startTime,
+
+        end_time: form.endTime,
       };
 
-      setSchedules([...schedules, newSchedule]);
+      // =========================
+      // EDIT JADWAL
+      // =========================
+
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from("schedules")
+          .update(scheduleData)
+          .eq("id", editingId)
+          .eq("user_id", session.user.id);
+
+        if (error) {
+          console.error("Gagal mengubah jadwal:", error);
+
+          alert("Gagal mengubah jadwal: " + error.message);
+
+          return;
+        }
+      }
+
+      // =========================
+      // TAMBAH JADWAL
+      // =========================
+      else {
+        const { error } = await supabase.from("schedules").insert(scheduleData);
+
+        if (error) {
+          console.error("Gagal menambahkan jadwal:", error);
+
+          alert("Gagal menyimpan jadwal: " + error.message);
+
+          return;
+        }
+      }
+
+      // Ambil ulang data terbaru
+      await fetchSchedules();
+
+      setSelectedDay(form.day);
+
+      setShowForm(false);
+
+      setForm({
+        course: "",
+        lecturer: "",
+        room: "",
+        day: form.day,
+        startTime: "",
+        endTime: "",
+      });
+
+      setEditingId(null);
+    } catch (error) {
+      console.error("Error menyimpan jadwal:", error);
+
+      alert("Terjadi kesalahan saat menyimpan jadwal.");
     }
-
-    setSelectedDay(form.day);
-    setShowForm(false);
-
-    setForm({
-      course: "",
-      lecturer: "",
-      room: "",
-      day: form.day,
-      startTime: "",
-      endTime: "",
-    });
-
-    setEditingId(null);
   }
 
   // =========================
@@ -264,10 +382,15 @@ function Schedule({ activeSemester }) {
 
     setForm({
       course: schedule.course,
+
       lecturer: schedule.lecturer,
+
       room: schedule.room,
+
       day: schedule.day,
+
       startTime: schedule.startTime,
+
       endTime: schedule.endTime,
     });
 
@@ -278,14 +401,45 @@ function Schedule({ activeSemester }) {
   // HAPUS
   // =========================
 
-  function deleteSchedule(id) {
+  async function deleteSchedule(id) {
     const confirmDelete = window.confirm("Hapus jadwal kuliah ini?");
 
     if (!confirmDelete) {
       return;
     }
 
-    setSchedules(schedules.filter((schedule) => schedule.id !== id));
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        alert("Sesi login tidak ditemukan.");
+
+        return;
+      }
+
+      const { error } = await supabase
+        .from("schedules")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", session.user.id);
+
+      if (error) {
+        console.error("Gagal menghapus jadwal:", error);
+
+        alert("Gagal menghapus jadwal: " + error.message);
+
+        return;
+      }
+
+      await fetchSchedules();
+    } catch (error) {
+      console.error("Error menghapus jadwal:", error);
+
+      alert("Terjadi kesalahan saat menghapus jadwal.");
+    }
   }
 
   // =========================
@@ -298,7 +452,9 @@ function Schedule({ activeSemester }) {
 
   return (
     <section className="schedule-page">
-      {/* HEADER */}
+      {/* =========================
+          HEADER
+      ========================= */}
 
       <div className="page-header">
         <div>
@@ -314,7 +470,9 @@ function Schedule({ activeSemester }) {
         </button>
       </div>
 
-      {/* DAY SELECTOR */}
+      {/* =========================
+          DAY SELECTOR
+      ========================= */}
 
       <div className="day-selector">
         {days.map((day) => (
@@ -332,7 +490,9 @@ function Schedule({ activeSemester }) {
         ))}
       </div>
 
-      {/* SCHEDULE */}
+      {/* =========================
+          SCHEDULE
+      ========================= */}
 
       <div className="schedule-page-card">
         <div className="schedule-page-title">
@@ -345,7 +505,15 @@ function Schedule({ activeSemester }) {
           <span>{daySchedules.length} kelas</span>
         </div>
 
-        {daySchedules.length === 0 ? (
+        {loading ? (
+          <div className="schedule-empty">
+            <div className="schedule-empty-icon">◷</div>
+
+            <h3>Memuat jadwal...</h3>
+
+            <p>Mengambil data jadwal dari CampusFlow.</p>
+          </div>
+        ) : daySchedules.length === 0 ? (
           <div className="schedule-empty">
             <div className="schedule-empty-icon">◷</div>
 
@@ -407,7 +575,9 @@ function Schedule({ activeSemester }) {
         )}
       </div>
 
-      {/* WEEK SUMMARY */}
+      {/* =========================
+          WEEK SUMMARY
+      ========================= */}
 
       <div className="week-summary">
         <div>
@@ -437,7 +607,9 @@ function Schedule({ activeSemester }) {
         </div>
       </div>
 
-      {/* MODAL */}
+      {/* =========================
+          MODAL
+      ========================= */}
 
       {showForm && (
         <div className="modal-overlay">
@@ -455,7 +627,9 @@ function Schedule({ activeSemester }) {
             </div>
 
             <form onSubmit={saveSchedule}>
-              {/* MATA KULIAH */}
+              {/* =========================
+                  MATA KULIAH
+              ========================= */}
 
               <div className="form-group">
                 <label>Mata Kuliah</label>
@@ -484,7 +658,9 @@ function Schedule({ activeSemester }) {
                 )}
               </div>
 
-              {/* DOSEN & RUANGAN */}
+              {/* =========================
+                  DOSEN & RUANGAN
+              ========================= */}
 
               <div className="form-row">
                 <div className="form-group">
@@ -512,7 +688,9 @@ function Schedule({ activeSemester }) {
                 </div>
               </div>
 
-              {/* HARI */}
+              {/* =========================
+                  HARI
+              ========================= */}
 
               <div className="form-group">
                 <label>Hari</label>
@@ -526,7 +704,9 @@ function Schedule({ activeSemester }) {
                 </select>
               </div>
 
-              {/* JAM */}
+              {/* =========================
+                  JAM
+              ========================= */}
 
               <div className="form-row">
                 <div className="form-group">
@@ -552,7 +732,9 @@ function Schedule({ activeSemester }) {
                 </div>
               </div>
 
-              {/* BUTTON */}
+              {/* =========================
+                  BUTTON
+              ========================= */}
 
               <div className="modal-actions">
                 <button
