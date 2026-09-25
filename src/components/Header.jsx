@@ -11,8 +11,14 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   const [tasks, setTasks] = useState([]);
   const [schedules, setSchedules] = useState([]);
 
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [profile, setProfile] = useState({
+    fullName: "",
+    nickname: "",
+    university: "",
+    studyProgram: "",
+  });
 
+  const [showNotifications, setShowNotifications] = useState(false);
   const notificationRef = useRef(null);
 
   // =========================
@@ -26,6 +32,64 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
       alert("Gagal keluar dari akun: " + error.message);
     }
   };
+
+  // =========================
+  // AMBIL PROFIL USER
+  // =========================
+
+  async function fetchProfile() {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("full_name, nickname, university, study_program")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Gagal mengambil profil header:", error);
+        return;
+      }
+
+      if (data) {
+        setProfile({
+          fullName: data.full_name || "",
+          nickname: data.nickname || "",
+          university: data.university || "",
+          studyProgram: data.study_program || "",
+        });
+      }
+    } catch (error) {
+      console.error("Error mengambil profil header:", error);
+    }
+  }
+
+  useEffect(() => {
+    // Ambil profil pertama kali saat Header dibuka
+    fetchProfile();
+
+    // Dengarkan perubahan profil dari halaman Settings
+    function handleProfileUpdated() {
+      fetchProfile();
+    }
+
+    window.addEventListener("campusflow-profile-updated", handleProfileUpdated);
+
+    return () => {
+      window.removeEventListener(
+        "campusflow-profile-updated",
+        handleProfileUpdated,
+      );
+    };
+  }, []);
 
   // =========================
   // UPDATE WAKTU
@@ -298,6 +362,25 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   ].sort((a, b) => a.minutesLeft - b.minutesLeft);
 
   // =========================
+  // PROFILE DISPLAY
+  // =========================
+
+  const displayName = profile.fullName.trim() || "Mahasiswa";
+  const greetingName = profile.nickname.trim();
+
+  const profileInitial = profile.fullName.trim()
+    ? profile.fullName.trim().charAt(0).toUpperCase()
+    : "M";
+
+  const shortUniversity = profile.university
+    ? profile.university.split(" (")[0].trim()
+    : "";
+
+  const academicInfo = [shortUniversity, profile.studyProgram]
+    .filter(Boolean)
+    .join(" · ");
+
+  // =========================
   // RETURN
   // =========================
 
@@ -306,7 +389,10 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
       <div>
         <p className="header-date">{formattedDate}</p>
 
-        <h1>{greeting} 👋</h1>
+        <h1>
+          {greeting}
+          {greetingName ? `, ${greetingName}` : ""} 👋
+        </h1>
       </div>
 
       <div className="header-actions">
@@ -418,10 +504,18 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
         ========================= */}
 
         <div className="profile">
-          <div className="profile-avatar">D</div>
+          <div className="profile-avatar">{profileInitial}</div>
 
           <div className="profile-info">
-            <strong>Mahasiswa</strong>
+            <strong className="profile-name" title={displayName}>
+              {displayName}
+            </strong>
+
+            {academicInfo && (
+              <span className="profile-academic" title={academicInfo}>
+                {academicInfo}
+              </span>
+            )}
 
             <select
               className="semester-select"
@@ -429,19 +523,12 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
               onChange={handleSemesterChange}
             >
               <option value="1">Semester 1</option>
-
               <option value="2">Semester 2</option>
-
               <option value="3">Semester 3</option>
-
               <option value="4">Semester 4</option>
-
               <option value="5">Semester 5</option>
-
               <option value="6">Semester 6</option>
-
               <option value="7">Semester 7</option>
-
               <option value="8">Semester 8</option>
             </select>
           </div>

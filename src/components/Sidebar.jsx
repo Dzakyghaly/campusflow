@@ -107,7 +107,11 @@ function Sidebar({
       </nav>
 
       <div className="sidebar-bottom">
-        <button className="menu-item">
+        <button
+          type="button"
+          className={`menu-item ${currentPage === "settings" ? "active" : ""}`}
+          onClick={() => setCurrentPage("settings")}
+        >
           <span>⚙</span>
           Settings
         </button>

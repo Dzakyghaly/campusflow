@@ -14,6 +14,7 @@ import Calendar from "./components/Calendar";
 import Notes from "./components/Notes";
 import Attendance from "./components/Attendance";
 import Grades from "./components/Grades";
+import Settings from "./components/Settings";
 import Auth from "./components/Auth";
 
 function App() {
@@ -24,23 +25,77 @@ function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
+  // Menandai bahwa user sedang
+  // membuka link recovery password
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    return params.get("reset-password") === "true";
+  });
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let mounted = true;
+
+    // =========================
+    // CEK SESSION AWAL
+    // =========================
+
+    async function checkSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
       setSession(session);
       setAuthLoading(false);
-    });
+    }
+
+    checkSession();
+
+    // =========================
+    // DENGARKAN PERUBAHAN AUTH
+    // =========================
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+
       setSession(session);
+
+      // Supabase mengirim event ini
+      // ketika user membuka link reset password
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecovery(true);
+      }
+
       setAuthLoading(false);
     });
 
     return () => {
+      mounted = false;
       subscription.unsubscribe();
     };
   }, []);
+
+  // =========================
+  // SELESAI RESET PASSWORD
+  // =========================
+
+  function finishPasswordRecovery() {
+    setIsPasswordRecovery(false);
+
+    const url = new URL(window.location.href);
+
+    url.searchParams.delete("reset-password");
+
+    window.history.replaceState(
+      {},
+      document.title,
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }
 
   // =========================
   // HALAMAN AKTIF
@@ -155,6 +210,15 @@ function App() {
       return <Grades key={activeSemester} activeSemester={activeSemester} />;
     }
 
+    if (currentPage === "settings") {
+      return (
+        <Settings
+          activeSemester={activeSemester}
+          changeSemester={changeSemester}
+        />
+      );
+    }
+
     return (
       <Dashboard
         key={activeSemester}
@@ -165,18 +229,38 @@ function App() {
   }
 
   // =========================
-  // CEK LOGIN
+  // LOADING AUTH
   // =========================
 
   if (authLoading) {
     return (
       <div className="auth-page">
         <div className="auth-card">
-          <h2>Memuat CampusFlow...</h2>
+          <div className="auth-loading">
+            <div className="auth-loading-logo">C</div>
+
+            <h2>CampusFlow</h2>
+
+            <p>Memuat Student Workspace...</p>
+          </div>
         </div>
       </div>
     );
   }
+
+  // =========================
+  // PASSWORD RECOVERY
+  // =========================
+
+  if (isPasswordRecovery) {
+    return (
+      <Auth passwordRecovery onRecoveryComplete={finishPasswordRecovery} />
+    );
+  }
+
+  // =========================
+  // BELUM LOGIN
+  // =========================
 
   if (!session) {
     return <Auth />;
