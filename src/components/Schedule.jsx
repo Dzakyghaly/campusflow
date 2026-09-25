@@ -352,6 +352,8 @@ function Schedule({ activeSemester }) {
       // Ambil ulang data terbaru
       await fetchSchedules();
 
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
+
       setSelectedDay(form.day);
 
       setShowForm(false);
@@ -435,6 +437,8 @@ function Schedule({ activeSemester }) {
       }
 
       await fetchSchedules();
+
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
     } catch (error) {
       console.error("Error menghapus jadwal:", error);
 

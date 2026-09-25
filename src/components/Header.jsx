@@ -98,7 +98,7 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(new Date());
-    }, 30000);
+    }, 10000);
 
     return () => clearInterval(interval);
   }, []);
@@ -228,6 +228,30 @@ function Header({ activeSemester, changeSemester, theme, toggleTheme }) {
 
   useEffect(() => {
     fetchNotificationData();
+  }, [activeSemester]);
+
+  // =========================
+  // REFRESH NOTIFIKASI LANGSUNG
+  // SAAT TASK / JADWAL BERUBAH
+  // =========================
+
+  useEffect(() => {
+    function handleNotificationDataUpdated() {
+      setNow(new Date());
+      fetchNotificationData();
+    }
+
+    window.addEventListener(
+      "campusflow-notifications-updated",
+      handleNotificationDataUpdated,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "campusflow-notifications-updated",
+        handleNotificationDataUpdated,
+      );
+    };
   }, [activeSemester]);
 
   // =========================

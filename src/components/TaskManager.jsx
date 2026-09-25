@@ -357,6 +357,8 @@ function TaskManager({ activeSemester }) {
 
       await fetchData();
 
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
+
       setShowForm(false);
       resetForm();
     } catch (error) {
@@ -397,6 +399,8 @@ function TaskManager({ activeSemester }) {
       }
 
       await fetchData();
+
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
 
       if (selectedTask?.id === task.id) {
         setSelectedTask((previous) => ({
@@ -485,6 +489,8 @@ function TaskManager({ activeSemester }) {
 
       await fetchData();
 
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
+
       setResultTask(null);
       setResultFile(null);
 
@@ -559,6 +565,8 @@ function TaskManager({ activeSemester }) {
       setSelectedTask(null);
 
       await fetchData();
+
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
 
       alert("Tugas selesai dan sudah dipindahkan ke Riwayat Tugas.");
     } catch (error) {
@@ -652,6 +660,8 @@ function TaskManager({ activeSemester }) {
       }
 
       await fetchData();
+
+      window.dispatchEvent(new Event("campusflow-notifications-updated"));
     } catch (error) {
       console.error(error);
 
